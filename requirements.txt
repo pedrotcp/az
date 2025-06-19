@@ -4,3 +4,6 @@ ortools
 scipopt>=9.0
 highspy>=1.6
 tqdm>=4.66
+bitarray>=2.9.2
+tqdm>=4.66.4
+typing-extensions>=4.11.0
