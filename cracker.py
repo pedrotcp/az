@@ -20,57 +20,61 @@ del all_combos
 # Create output folder
 os.makedirs("sets", exist_ok=True)
 
+# These will be re-initialized inside each set
+coverage = None
+accepted = None
+lock = None
+
+def process_candidate(_):
+    candidate = sorted(random.sample(range(1, TOTAL_NUMBERS + 1), TICKET_SIZE))
+    six_combos = itertools.combinations(candidate, DRAW_SIZE)
+    local_new = []
+
+    for combo in six_combos:
+        idx = combo_index.get(combo)
+        if idx is not None:
+            local_new.append(idx)
+
+    new_covered = 0
+    with lock:
+        for idx in local_new:
+            if not coverage[idx]:
+                coverage[idx] = True
+                new_covered += 1
+
+        if new_covered >= NEW_COVER_THRESHOLD and len(accepted) < MAX_TICKETS_PER_SET:
+            accepted.append(candidate)
+            return new_covered
+    return 0
+
 def verify_coverage(tickets):
-    coverage = bitarray(COMBO_COUNT)
-    coverage.setall(False)
+    check = bitarray(COMBO_COUNT)
+    check.setall(False)
     for ticket in tickets:
         for combo in itertools.combinations(ticket, DRAW_SIZE):
             idx = combo_index.get(combo)
             if idx is not None:
-                coverage[idx] = True
-    covered = coverage.count(True)
+                check[idx] = True
+    covered = check.count(True)
     percent = covered / COMBO_COUNT * 100
     return covered, percent
 
 def generate_set(set_number):
+    global coverage, accepted, lock
     print(f"\n[>] Generating Set {set_number+1}/{MAX_SETS}")
+
     coverage = bitarray(COMBO_COUNT)
     coverage.setall(False)
     accepted = []
-
     lock = multiprocessing.Lock()
     last_covered = 0
     total_required = int(COMBO_COUNT * TARGET_COVERAGE)
-
-    def process_candidate(_):
-        candidate = sorted(random.sample(range(1, TOTAL_NUMBERS + 1), TICKET_SIZE))
-        six_combos = itertools.combinations(candidate, DRAW_SIZE)
-        local_new = []
-
-        for combo in six_combos:
-            idx = combo_index.get(combo)
-            if idx is not None:
-                local_new.append(idx)
-
-        new_covered = 0
-        with lock:
-            for idx in local_new:
-                if not coverage[idx]:
-                    coverage[idx] = True
-                    new_covered += 1
-
-            if new_covered >= NEW_COVER_THRESHOLD and len(accepted) < MAX_TICKETS_PER_SET:
-                accepted.append(candidate)
-                return new_covered
-        return 0
 
     with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as pool:
         with tqdm(total=total_required, desc=f"Set {set_number+1}", unit="combos") as pbar:
             start_time = time.time()
             while True:
-                t0 = time.time()
                 results = pool.map(process_candidate, range(64))
-                t1 = time.time()
 
                 newly_accepted = sum(1 for r in results if r > 0)
                 rejected = len(results) - newly_accepted
