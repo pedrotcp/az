@@ -8,7 +8,7 @@ TICKET_SIZE = 30
 COMBO_COUNT = 50063860  # C(60,6)
 TARGET_COVERAGE = 0.95
 MAX_TICKETS_PER_SET = 105
-CANDIDATES_PER_BATCH = 256
+CANDIDATES_PER_BATCH = 128  # Reduced to ease memory load
 
 # Precompute combo -> index
 print("[+] Precomputing combo index...")
@@ -38,8 +38,12 @@ def worker_loop(task_queue, result_queue):
             break
         candidate = sorted(random.sample(range(1, TOTAL_NUMBERS + 1), TICKET_SIZE))
         six_combos = itertools.combinations(candidate, DRAW_SIZE)
-        indexes = [combo_index.get(combo) for combo in six_combos if combo in combo_index]
-        result_queue.put((candidate, indexes))
+        seen = set()
+        for combo in six_combos:
+            idx = combo_index.get(combo)
+            if idx is not None:
+                seen.add(idx)
+        result_queue.put((candidate, list(seen)))  # Convert to list right before sending
 
 def generate_set(set_number):
     print(f"\n[>] Generating Set {set_number+1}")
@@ -62,14 +66,17 @@ def generate_set(set_number):
             for _ in range(CANDIDATES_PER_BATCH):
                 task_queue.put("GO")
 
-            candidates = []
+            best_new_covered = 0
+            best_candidate = None
+            best_indexes = []
+
             for _ in range(CANDIDATES_PER_BATCH):
                 candidate, indexes = result_queue.get()
                 new_covered = sum(1 for idx in indexes if not coverage[idx])
-                candidates.append((new_covered, candidate, indexes))
-
-            candidates.sort(reverse=True, key=lambda x: x[0])
-            best_new_covered, best_candidate, best_indexes = candidates[0]
+                if new_covered > best_new_covered:
+                    best_new_covered = new_covered
+                    best_candidate = candidate
+                    best_indexes = indexes
 
             if best_new_covered == 0:
                 continue
