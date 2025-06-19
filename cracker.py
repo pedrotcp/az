@@ -6,10 +6,9 @@ TOTAL_NUMBERS = 60
 DRAW_SIZE = 6
 TICKET_SIZE = 30
 COMBO_COUNT = 50063860  # C(60,6)
-TARGET_COVERAGE = 0.98
-MAX_TICKETS_PER_SET = 100
-MAX_SETS = 3
-NEW_COVER_THRESHOLD = int(os.getenv("NEW_COVER_THRESHOLD", 50000))
+TARGET_COVERAGE = 0.95
+MAX_TICKETS_PER_SET = 105
+CANDIDATES_PER_BATCH = 256
 
 # Precompute combo -> index
 print("[+] Precomputing combo index...")
@@ -43,7 +42,7 @@ def worker_loop(task_queue, result_queue):
         result_queue.put((candidate, indexes))
 
 def generate_set(set_number):
-    print(f"\n[>] Generating Set {set_number+1}/{MAX_SETS}")
+    print(f"\n[>] Generating Set {set_number+1}")
     coverage = bitarray(COMBO_COUNT)
     coverage.setall(False)
     accepted = []
@@ -59,22 +58,25 @@ def generate_set(set_number):
 
     with tqdm(total=total_required, desc=f"Set {set_number+1}", unit="combos") as pbar:
         start_time = time.time()
-        while True:
-            for _ in range(64):
+        while len(accepted) < MAX_TICKETS_PER_SET:
+            for _ in range(CANDIDATES_PER_BATCH):
                 task_queue.put("GO")
 
-            newly_accepted = 0
-            rejected = 0
-            for _ in range(64):
+            candidates = []
+            for _ in range(CANDIDATES_PER_BATCH):
                 candidate, indexes = result_queue.get()
                 new_covered = sum(1 for idx in indexes if not coverage[idx])
-                if new_covered >= NEW_COVER_THRESHOLD and len(accepted) < MAX_TICKETS_PER_SET:
-                    accepted.append(candidate)
-                    for idx in indexes:
-                        coverage[idx] = True
-                    newly_accepted += 1
-                else:
-                    rejected += 1
+                candidates.append((new_covered, candidate, indexes))
+
+            candidates.sort(reverse=True, key=lambda x: x[0])
+            best_new_covered, best_candidate, best_indexes = candidates[0]
+
+            if best_new_covered == 0:
+                continue
+
+            for idx in best_indexes:
+                coverage[idx] = True
+            accepted.append(best_candidate)
 
             covered_now = coverage.count(True)
             delta = covered_now - last_covered
@@ -87,10 +89,10 @@ def generate_set(set_number):
             eta_sec = remaining / combos_per_sec if combos_per_sec > 0 else float("inf")
             eta_min = eta_sec / 60
 
-            print(f"    [+] Accepted: {newly_accepted} | Rejected: {rejected} | Total: {len(accepted)}")
+            print(f"    [+] Best new coverage: {best_new_covered} | Total Tickets: {len(accepted)}")
             print(f"    [~] Speed: {int(combos_per_sec):,} combos/sec | ETA: {eta_min:.1f} min")
 
-            if covered_now >= total_required or len(accepted) >= MAX_TICKETS_PER_SET:
+            if covered_now >= total_required:
                 break
 
     for _ in workers:
@@ -110,8 +112,10 @@ def generate_set(set_number):
     print(f"    - Coverage: {verified_covered:,} combos ({percent:.6f}%)\n")
 
 def main():
-    for i in range(MAX_SETS):
-        generate_set(i)
+    set_number = 0
+    while True:
+        generate_set(set_number)
+        set_number += 1
 
 if __name__ == "__main__":
     main()
