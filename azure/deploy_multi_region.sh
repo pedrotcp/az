@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ################################ EDIT ################################
-REPO=https://github.com/youruser/lotto-cover.git       # your repo
+REPO=https://github.com/pedrotcp/az.git      # your repo
 RG=coverRG
 STOR=coverstore$RANDOM
 VM_SIZE=Standard_F64s_v2          # 64 vCPU, fits under 65-core cap
