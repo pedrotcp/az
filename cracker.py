@@ -8,7 +8,7 @@ TICKET_SIZE = 30
 COMBO_COUNT = 50063860  # C(60,6)
 TARGET_COVERAGE = 0.95
 MAX_TICKETS_PER_SET = 105
-CANDIDATES_PER_BATCH = 128  # Reduced to ease memory load
+CANDIDATES_PER_BATCH = 64  # Lowered to reduce RAM load
 
 # Precompute combo -> index
 print("[+] Precomputing combo index...")
@@ -38,12 +38,13 @@ def worker_loop(task_queue, result_queue):
             break
         candidate = sorted(random.sample(range(1, TOTAL_NUMBERS + 1), TICKET_SIZE))
         six_combos = itertools.combinations(candidate, DRAW_SIZE)
-        seen = set()
+        delta = bitarray(COMBO_COUNT)
+        delta.setall(False)
         for combo in six_combos:
             idx = combo_index.get(combo)
             if idx is not None:
-                seen.add(idx)
-        result_queue.put((candidate, list(seen)))  # Convert to list right before sending
+                delta[idx] = True
+        result_queue.put((candidate, delta))
 
 def generate_set(set_number):
     print(f"\n[>] Generating Set {set_number+1}")
@@ -68,26 +69,25 @@ def generate_set(set_number):
 
             best_new_covered = 0
             best_candidate = None
-            best_indexes = []
+            best_delta = None
 
             for _ in range(CANDIDATES_PER_BATCH):
-                candidate, indexes = result_queue.get()
-                new_covered = sum(1 for idx in indexes if not coverage[idx])
+                candidate, delta = result_queue.get()
+                new_covered = (delta & ~coverage).count(True)
                 if new_covered > best_new_covered:
                     best_new_covered = new_covered
                     best_candidate = candidate
-                    best_indexes = indexes
+                    best_delta = delta
 
             if best_new_covered == 0:
                 continue
 
-            for idx in best_indexes:
-                coverage[idx] = True
+            coverage |= best_delta
             accepted.append(best_candidate)
 
             covered_now = coverage.count(True)
-            delta = covered_now - last_covered
-            pbar.update(delta)
+            delta_count = covered_now - last_covered
+            pbar.update(delta_count)
             last_covered = covered_now
 
             elapsed = time.time() - start_time
