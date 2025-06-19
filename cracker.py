@@ -11,7 +11,7 @@ MAX_TICKETS_PER_SET = 100
 MAX_SETS = 3
 NEW_COVER_THRESHOLD = int(os.getenv("NEW_COVER_THRESHOLD", 50000))
 
-# Precompute combo → index
+# Precompute combo -> index
 print("[+] Precomputing combo index...")
 all_combos = list(itertools.combinations(range(1, TOTAL_NUMBERS + 1), DRAW_SIZE))
 combo_index = {combo: idx for idx, combo in enumerate(all_combos)}
@@ -19,33 +19,6 @@ del all_combos
 
 # Create output folder
 os.makedirs("sets", exist_ok=True)
-
-# These will be re-initialized inside each set
-coverage = None
-accepted = None
-lock = None
-
-def process_candidate(_):
-    candidate = sorted(random.sample(range(1, TOTAL_NUMBERS + 1), TICKET_SIZE))
-    six_combos = itertools.combinations(candidate, DRAW_SIZE)
-    local_new = []
-
-    for combo in six_combos:
-        idx = combo_index.get(combo)
-        if idx is not None:
-            local_new.append(idx)
-
-    new_covered = 0
-    with lock:
-        for idx in local_new:
-            if not coverage[idx]:
-                coverage[idx] = True
-                new_covered += 1
-
-        if new_covered >= NEW_COVER_THRESHOLD and len(accepted) < MAX_TICKETS_PER_SET:
-            accepted.append(candidate)
-            return new_covered
-    return 0
 
 def verify_coverage(tickets):
     check = bitarray(COMBO_COUNT)
@@ -59,42 +32,71 @@ def verify_coverage(tickets):
     percent = covered / COMBO_COUNT * 100
     return covered, percent
 
-def generate_set(set_number):
-    global coverage, accepted, lock
-    print(f"\n[>] Generating Set {set_number+1}/{MAX_SETS}")
+def worker_loop(task_queue, result_queue):
+    while True:
+        task = task_queue.get()
+        if task == "STOP":
+            break
+        candidate = sorted(random.sample(range(1, TOTAL_NUMBERS + 1), TICKET_SIZE))
+        six_combos = itertools.combinations(candidate, DRAW_SIZE)
+        indexes = [combo_index.get(combo) for combo in six_combos if combo in combo_index]
+        result_queue.put((candidate, indexes))
 
+def generate_set(set_number):
+    print(f"\n[>] Generating Set {set_number+1}/{MAX_SETS}")
     coverage = bitarray(COMBO_COUNT)
     coverage.setall(False)
     accepted = []
-    lock = multiprocessing.Lock()
     last_covered = 0
     total_required = int(COMBO_COUNT * TARGET_COVERAGE)
 
-    with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as pool:
-        with tqdm(total=total_required, desc=f"Set {set_number+1}", unit="combos") as pbar:
-            start_time = time.time()
-            while True:
-                results = pool.map(process_candidate, range(64))
+    task_queue = multiprocessing.Queue()
+    result_queue = multiprocessing.Queue()
 
-                newly_accepted = sum(1 for r in results if r > 0)
-                rejected = len(results) - newly_accepted
+    workers = [multiprocessing.Process(target=worker_loop, args=(task_queue, result_queue)) for _ in range(multiprocessing.cpu_count())]
+    for w in workers:
+        w.start()
 
-                covered_now = coverage.count(True)
-                delta = covered_now - last_covered
-                pbar.update(delta)
-                last_covered = covered_now
+    with tqdm(total=total_required, desc=f"Set {set_number+1}", unit="combos") as pbar:
+        start_time = time.time()
+        while True:
+            for _ in range(64):
+                task_queue.put("GO")
 
-                elapsed = time.time() - start_time
-                combos_per_sec = covered_now / elapsed if elapsed > 0 else 0
-                remaining = max(0, total_required - covered_now)
-                eta_sec = remaining / combos_per_sec if combos_per_sec > 0 else float("inf")
-                eta_min = eta_sec / 60
+            newly_accepted = 0
+            rejected = 0
+            for _ in range(64):
+                candidate, indexes = result_queue.get()
+                new_covered = sum(1 for idx in indexes if not coverage[idx])
+                if new_covered >= NEW_COVER_THRESHOLD and len(accepted) < MAX_TICKETS_PER_SET:
+                    accepted.append(candidate)
+                    for idx in indexes:
+                        coverage[idx] = True
+                    newly_accepted += 1
+                else:
+                    rejected += 1
 
-                print(f"    [+] Accepted: {newly_accepted} | Rejected: {rejected} | Total: {len(accepted)}")
-                print(f"    [~] Speed: {int(combos_per_sec):,} combos/sec | ETA: {eta_min:.1f} min")
+            covered_now = coverage.count(True)
+            delta = covered_now - last_covered
+            pbar.update(delta)
+            last_covered = covered_now
 
-                if covered_now >= total_required or len(accepted) >= MAX_TICKETS_PER_SET:
-                    break
+            elapsed = time.time() - start_time
+            combos_per_sec = covered_now / elapsed if elapsed > 0 else 0
+            remaining = max(0, total_required - covered_now)
+            eta_sec = remaining / combos_per_sec if combos_per_sec > 0 else float("inf")
+            eta_min = eta_sec / 60
+
+            print(f"    [+] Accepted: {newly_accepted} | Rejected: {rejected} | Total: {len(accepted)}")
+            print(f"    [~] Speed: {int(combos_per_sec):,} combos/sec | ETA: {eta_min:.1f} min")
+
+            if covered_now >= total_required or len(accepted) >= MAX_TICKETS_PER_SET:
+                break
+
+    for _ in workers:
+        task_queue.put("STOP")
+    for w in workers:
+        w.join()
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"sets/bicho_set_{timestamp}_set{set_number+1}.txt"
