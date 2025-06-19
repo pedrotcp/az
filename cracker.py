@@ -8,7 +8,7 @@ TICKET_SIZE = 30
 COMBO_COUNT = 50063860  # C(60,6)
 TARGET_COVERAGE = 0.95
 MAX_TICKETS_PER_SET = 105
-CANDIDATES_PER_BATCH = 64  # Lowered to reduce RAM load
+CANDIDATES_PER_BATCH = 64  # Safe value
 
 # Precompute combo -> index
 print("[+] Precomputing combo index...")
@@ -31,20 +31,23 @@ def verify_coverage(tickets):
     percent = covered / COMBO_COUNT * 100
     return covered, percent
 
-def worker_loop(task_queue, result_queue):
+def worker_loop(task_queue, result_queue, coverage_snapshot):
+    snapshot = bitarray()
+    snapshot.frombytes(coverage_snapshot)
     while True:
         task = task_queue.get()
         if task == "STOP":
             break
         candidate = sorted(random.sample(range(1, TOTAL_NUMBERS + 1), TICKET_SIZE))
         six_combos = itertools.combinations(candidate, DRAW_SIZE)
-        delta = bitarray(COMBO_COUNT)
-        delta.setall(False)
+        indexes = []
+        new_covered = 0
         for combo in six_combos:
             idx = combo_index.get(combo)
-            if idx is not None:
-                delta[idx] = True
-        result_queue.put((candidate, delta))
+            if idx is not None and not snapshot[idx]:
+                indexes.append(idx)
+                new_covered += 1
+        result_queue.put((new_covered, candidate, indexes))
 
 def generate_set(set_number):
     print(f"\n[>] Generating Set {set_number+1}")
@@ -57,7 +60,8 @@ def generate_set(set_number):
     task_queue = multiprocessing.Queue()
     result_queue = multiprocessing.Queue()
 
-    workers = [multiprocessing.Process(target=worker_loop, args=(task_queue, result_queue)) for _ in range(multiprocessing.cpu_count())]
+    coverage_bytes = coverage.tobytes()
+    workers = [multiprocessing.Process(target=worker_loop, args=(task_queue, result_queue, coverage_bytes)) for _ in range(multiprocessing.cpu_count())]
     for w in workers:
         w.start()
 
@@ -69,21 +73,22 @@ def generate_set(set_number):
 
             best_new_covered = 0
             best_candidate = None
-            best_delta = None
+            best_indexes = []
 
             for _ in range(CANDIDATES_PER_BATCH):
-                candidate, delta = result_queue.get()
-                new_covered = (delta & ~coverage).count(True)
+                new_covered, candidate, indexes = result_queue.get()
                 if new_covered > best_new_covered:
                     best_new_covered = new_covered
                     best_candidate = candidate
-                    best_delta = delta
+                    best_indexes = indexes
 
             if best_new_covered == 0:
                 continue
 
-            coverage |= best_delta
+            for idx in best_indexes:
+                coverage[idx] = True
             accepted.append(best_candidate)
+            coverage_bytes = coverage.tobytes()  # Refresh snapshot for next batch
 
             covered_now = coverage.count(True)
             delta_count = covered_now - last_covered
