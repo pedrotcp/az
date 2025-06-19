@@ -27,29 +27,26 @@ packages: [git, build-essential, python3.11, python3.11-venv, wget]
 
 runcmd:
   - |
-    set -e
-    cd /opt
+      set -e
+      cd /opt
 
-    # clone repo (private token already embedded in $REPO)
-    git clone $REPO repo
+      git clone $REPO repo
 
-    # create venv and install deps
-    python3.11 -m venv /opt/venv
-    /opt/venv/bin/pip install -q -r repo/requirements.txt
+      python3.11 -m venv /opt/venv
+      /opt/venv/bin/pip install -q -r repo/requirements.txt
 
-    # unique seed from hostname digits
-    SEED=$(hostname | tr -dc '0-9')
+      # unique seed from hostname digits  (note the backslash!)
+      SEED=\$(hostname | tr -dc '0-9')
 
-    # run pipeline WITHOUT 'source'
-    /opt/venv/bin/python repo/src/hg_greedy_seed.py --seed $SEED
-    /opt/venv/bin/python repo/src/cp_sat_rowgen.py
-    /opt/venv/bin/python repo/src/scip_branch_price.py
-    /opt/venv/bin/python repo/src/proof_fullcover.py
+      /opt/venv/bin/python repo/src/hg_greedy_seed.py --seed \$SEED
+      /opt/venv/bin/python repo/src/cp_sat_rowgen.py
+      /opt/venv/bin/python repo/src/scip_branch_price.py
+      /opt/venv/bin/python repo/src/proof_fullcover.py
 
-    # upload result
-    wget -q https://aka.ms/downloadazcopy-v10-linux -O az.tgz
-    tar xf az.tgz --strip-components=1
-    ./azcopy copy phaseC.json "https://$STOR.blob.core.windows.net/results/$(hostname)-phaseC.json?$SAS"
+      # upload result   (both \$ for hostname)
+      wget -q https://aka.ms/downloadazcopy-v10-linux -O az.tgz
+      tar xf az.tgz --strip-components=1
+      ./azcopy copy phaseC.json "https://$STOR.blob.core.windows.net/results/\$(hostname)-phaseC.json?$SAS"
 EOF
 
 echo "==> launch pay-go VM per region (skips if quota/image unavailable)"
