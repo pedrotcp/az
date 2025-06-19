@@ -1,0 +1,6 @@
+numpy>=1.26
+numba>=0.59
+ortools==9.13
+scipopt>=9.0
+highspy>=1.6
+tqdm>=4.66
