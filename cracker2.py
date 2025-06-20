@@ -1,7 +1,8 @@
-import itertools, random, os, datetime, time
+import itertools, random, os, datetime
 from bitarray import bitarray
 from tqdm import tqdm
 from math import comb
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 TOTAL_NUMBERS = 60
 DRAW_SIZE = 6
@@ -9,9 +10,10 @@ TICKET_SIZE = 30
 COMBO_COUNT = comb(TOTAL_NUMBERS, DRAW_SIZE)
 TICKETS_PER_SET = 105
 
-POP_SIZE = 64        # FEEL FREE to push even higher
-N_GENERATIONS = 200  # Tune for your patience
-MUTATION_RATE = 0.1  # Per-ticket, per-generation
+POP_SIZE = 128          # Go nuts, but not so nuts you OOM!
+N_GENERATIONS = 10     # Tweak for patience
+MUTATION_RATE = 0.1     # Mutation per ticket per generation
+N_CORES = None          # Set to None for "all available"; or an int to cap
 
 def combo_to_index(combo):
     index = 0
@@ -23,7 +25,6 @@ def combo_to_index(combo):
     return index
 
 def ticket_coverage(ticket):
-    "Returns set of combo indices covered by a ticket."
     return set(combo_to_index(c) for c in itertools.combinations(ticket, DRAW_SIZE))
 
 def individual_coverage(tickets):
@@ -42,7 +43,6 @@ def random_individual():
     return [random_ticket() for _ in range(TICKETS_PER_SET)]
 
 def crossover(parent1, parent2):
-    "Single-point crossover, ticket-wise."
     cut = random.randint(1, TICKETS_PER_SET-1)
     child1 = parent1[:cut] + parent2[cut:]
     child2 = parent2[:cut] + parent1[cut:]
@@ -59,16 +59,24 @@ def mutate(individual):
             individual[i] = sorted(t)
     return individual
 
+def parallel_fitness(population, n_workers=None):
+    # Evaluate fitness in parallel!
+    fitnesses = [None] * len(population)
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        futures = {executor.submit(fitness, ind): idx for idx, ind in enumerate(population)}
+        for f in tqdm(as_completed(futures), total=len(futures), desc="Fitness (parallel)", leave=False):
+            idx = futures[f]
+            fitnesses[idx] = f.result()
+    return fitnesses
+
 def run_genetic():
-    print(f"[*] Starting genetic search with population {POP_SIZE}, {N_GENERATIONS} generations.")
+    print(f"[*] Genetic beast mode: {POP_SIZE} population, {N_GENERATIONS} generations, {N_CORES or os.cpu_count()} cores.")
     population = [random_individual() for _ in range(POP_SIZE)]
     best_tickets = None
     best_coverage = 0
 
     for gen in tqdm(range(N_GENERATIONS), desc="Evolving Generations", position=0):
-        fitnesses = []
-        for ind in tqdm(population, desc=f"Generation {gen} Fitness", position=1, leave=False):
-            fitnesses.append(fitness(ind))
+        fitnesses = parallel_fitness(population, N_CORES)
         max_fit = max(fitnesses)
         if max_fit > best_coverage:
             best_coverage = max_fit
@@ -110,4 +118,3 @@ def save_tickets(tickets):
 if __name__ == "__main__":
     best = run_genetic()
     save_tickets(best)
-
